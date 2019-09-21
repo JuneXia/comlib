@@ -11,7 +11,7 @@ if RELEASE:
 else:
     sys.path.append('/home/xiajun/dev/FlaskFace')
 
-from face_identification import faceid_pipeline
+# from face_identification import faceid_pipeline  # TODO: faceid_pipeline 不应该在这python文件里调用的。
 from sklearn.model_selection import KFold
 from scipy import interpolate
 from utils import dataset as datset
