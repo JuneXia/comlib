@@ -3,12 +3,14 @@ import os
 import math
 import random
 import cv2
+from scipy import misc
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.utils import to_categorical
+from utils import tools
 
-DEBUG = True
+DEBUG = False
 
 
 class ImageClass():
@@ -74,7 +76,7 @@ data
     images = os.listdir(data_path)
     images.sort()
     if DEBUG:
-        images = images[0:2]
+        images = images[0:5]
     for i, image in enumerate(images):
         cls_path = os.path.join(data_path, image)
         if os.path.isfile(cls_path):
@@ -90,6 +92,8 @@ data
 
         images_path.extend([os.path.join(data_path, image, img) for img in imgs])
         images_label.extend([i] * len(imgs))
+        tools.view_bar('loading: ', i + 1, len(images))
+    print('')
 
     images = np.array([images_path, images_label]).transpose()
 
@@ -112,8 +116,20 @@ data
 
         train_images_path = images_path[validation_size:]
         train_images_label = images_label[validation_size:]
+
+        print('\n********************************样 本 总 量*************************************')
+        print('len(train_images_path)={}, len(train_images_label)={}'.format(len(train_images_path), len(train_images_label)))
+        print('len(validation_images_path)={}, len(validation_images_label)={}'.format(len(validation_images_path), len(validation_images_label)))
+        print('num_train_class={}, num_validation_class={}'.format(len(set(train_images_label)), len(set(validation_images_label))))
+        print('*******************************************************************************\n')
+
         return train_images_path, train_images_label, validation_images_path, validation_images_label
     else:
+        print('\n********************************样 本 总 量*************************************')
+        print('len(images_path)={}, len(images_label)={}'.format(len(images_path), len(images_label)))
+        print('num_class={}'.format(len(set(images_label))))
+        print('*******************************************************************************\n')
+
         return images_path, images_label
 
 
@@ -146,6 +162,8 @@ def split_dataset(dataset, split_ratio, min_nrof_images_per_class, mode):
 
 
 def get_image_paths_and_labels(dataset, shuffle=False):
+    raise Exception('废弃，可以使用dataset.py下的load_dataset或者utils/tools.py下的load_images')
+
     image_paths_flat = []
     labels_flat = []
     for i in range(len(dataset)):
@@ -162,6 +180,8 @@ def get_image_paths_and_labels(dataset, shuffle=False):
 
 
 def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per_class=0):
+    raise Exception('废弃，可以使用dataset.py下的load_dataset或者utils/tools.py下的load_images')
+
     seed = 666
     np.random.seed(seed=seed)
     random.seed(seed)
@@ -179,46 +199,120 @@ def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per
     return train_set, val_set
 
 
+def random_rotate_image(image):
+    angle = np.random.uniform(low=-10.0, high=10.0)
+    return misc.imrotate(image, angle, 'bicubic')
+
+
 def get_control_flag(control, field):
     return tf.equal(tf.mod(tf.floor_div(control, field), 2), 1)
 
-# 1: Random rotate 2: Random crop  4: Random flip  8:  Fixed image standardization  16: Flip
-RANDOM_ROTATE = 1
-RANDOM_CROP = 2
-RANDOM_FLIP = 4
-FIXED_STANDARDIZATION = 8
-FLIP = 16
-def _parse_function(filename, label):
-    shape = [28, 28, 1]
-    image = tf.read_file(filename)
+
+def _tfparse_function_train(filename, label):
+    # shape = [28, 28, 1]
+    shape = [160, 160, 3]
+    image = tf.io.read_file(filename)
     image = tf.image.decode_image(image, shape[2])
     # image = tf.convert_to_tensor(image, dtype=tf.float32)
 
-    # >>>>在不知道图像尺寸的情况下，是不能乱set_shape的，仿照facenet.py中创建pipeline的方法写。
-    """
-    image = tf.cond(get_control_flag(control[0], RANDOM_ROTATE),
-                    lambda: tf.py_func(random_rotate_image, [image], tf.uint8),
-                    lambda: tf.identity(image))
-    image = tf.cond(get_control_flag(control[0], RANDOM_CROP),
-                    lambda: tf.random_crop(image, image_size + (3,)),
-                    lambda: tf.image.resize_image_with_crop_or_pad(image, image_size[0], image_size[1]))
-    image = tf.cond(get_control_flag(control[0], RANDOM_FLIP),
-                    lambda: tf.image.random_flip_left_right(image),
-                    lambda: tf.identity(image))
-    image = tf.cond(get_control_flag(control[0], FIXED_STANDARDIZATION),
-                    lambda: (tf.cast(image, tf.float32) - 127.5) / 128.0,
-                    lambda: tf.image.per_image_standardization(image))
-    image = tf.cond(get_control_flag(control[0], FLIP),
-                    lambda: tf.image.flip_left_right(image),
-                    lambda: tf.identity(image))
-    # pylint: disable=no-member
-    image.set_shape(image_size + (3,))
-    images.append(image)
-    """
+    # image = tf.image.resize_image_with_crop_or_pad(image, shape[0], shape[1])
+    image = tf.image.random_crop(image, shape)
+    image = tf.py_function(random_rotate_image, [image], tf.uint8)
 
-    image = tf.image.resize_image_with_crop_or_pad(image, shape[0], shape[1])
-    image = tf.cast(image, dtype=tf.float32)
-    return image, label
+    # image = tf.image.random_brightness(image, 0.4)
+    # image = tf.image.random_contrast(image, 0.8, 2)
+
+    image = tf.image.random_flip_left_right(image)
+
+    # image = tf.image.per_image_standardization(image)
+    image = (tf.cast(image, tf.float32) - 127.5) / 128.0
+    return image, (label, label)
+
+
+def _tfparse_function_validate(filename, label):
+    # shape = [28, 28, 1]
+    shape = [160, 160, 3]
+    image = tf.io.read_file(filename)
+    image = tf.image.decode_image(image, shape[2])
+    # image = tf.convert_to_tensor(image, dtype=tf.float32)
+
+    image = tf.image.resize_with_crop_or_pad(image, shape[0], shape[1])
+
+    # image = tf.image.per_image_standardization(image)
+    image = (tf.cast(image, tf.float32) - 127.5) / 128.0
+    return image, (label, label)
+
+
+class ImageParse(object):
+    RANDOM_ROTATE = 1
+    RANDOM_CROP = 2
+    RANDOM_LEFT_RIGHT_FLIP = 4
+    FIXED_STANDARDIZATION = 8
+    FLIP = 16
+    RANDOM_GLASS = 32
+    RANDOM_COLOR = 64
+    FIXED_CONTRACT = 128
+
+    def __init__(self, imshape=(28, 28, 1)):
+        self.imshape = imshape
+
+        self.set_train_augment()
+        self.set_validation_augment()
+
+    def set_train_augment(self, random_crop=True, random_rotate=True, random_left_right_flip=True, fixed_standardization=True):
+        self.train_augment = {ImageParse.RANDOM_CROP: random_crop,
+                              ImageParse.RANDOM_ROTATE: random_rotate,
+                              ImageParse.RANDOM_LEFT_RIGHT_FLIP: random_left_right_flip,
+                              ImageParse.FIXED_STANDARDIZATION: fixed_standardization
+                              }
+
+    def set_validation_augment(self, random_crop=False, random_rotate=False, random_left_right_flip=False, fixed_standardization=True):
+        self.validation_augment = {ImageParse.RANDOM_CROP: random_crop,
+                                   ImageParse.RANDOM_ROTATE: random_rotate,
+                                   ImageParse.RANDOM_LEFT_RIGHT_FLIP: random_left_right_flip,
+                                   ImageParse.FIXED_STANDARDIZATION: fixed_standardization
+                                   }
+
+    def _imdecode(self, filename):
+        image = tf.io.read_file(filename)
+        image = tf.image.decode_image(image, self.imshape[2])
+        # image = tf.convert_to_tensor(image, dtype=tf.float32)
+        return image
+
+    def _image_augment(self, image, augments):
+        if augments[ImageParse.RANDOM_CROP]:
+            image = tf.image.random_crop(image, self.imshape)
+        else:
+            # image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+            image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+
+        if augments[ImageParse.RANDOM_ROTATE]:
+            image = tf.py_function(random_rotate_image, [image], tf.uint8)
+
+        # image = tf.image.random_brightness(image, 0.4)
+        # image = tf.image.random_contrast(image, 0.8, 2)
+
+        if augments[ImageParse.RANDOM_LEFT_RIGHT_FLIP]:
+            image = tf.image.random_flip_left_right(image)
+
+        if augments[ImageParse.FIXED_STANDARDIZATION]:
+            image = (tf.cast(image, tf.float32) - 127.5) / 128.0
+        else:
+            image = tf.image.per_image_standardization(image)
+
+        return image
+
+    def train_parse_func(self, filename, label):
+        image = self._imdecode(filename)
+        image = self._image_augment(image, self.train_augment)
+
+        return image, (label, label)
+
+    def validation_parse_func(self, filename, label):
+        image = self._imdecode(filename)
+        image = self._image_augment(image, self.validation_augment)
+
+        return image, (label, label)
 
 
 class DataSet(object):
@@ -550,6 +644,11 @@ class SiameseDataset(object):
         self.train = is_train
         # self.transform = self.mnist_dataset.transform
 
+        print('\n***************************SiameseDataset 总 样 本 量***************************')
+        print('len(self.labels)={}, len(self.datas)={}'.format(len(self.labels), len(self.datas)))
+        print('num_class={}'.format(len(set(self.labels))))
+        print('*******************************************************************************\n')
+
         if self.train:
             self.labels_set = set(self.labels)
             self.label_to_indices = {label: np.where(self.labels == label)[0]
@@ -564,40 +663,34 @@ class SiameseDataset(object):
 
             random_state = np.random.RandomState(29)
 
-            '''
-            positive_pairs = [[i,
-                               random_state.choice(self.label_to_indices[self.test_labels[i].item()]),
-                               1]
-                              for i in range(0, len(self.test_data), 2)]
-            '''
-
             positive_pairs = []
-            for i in range(0, len(self.test_data), 2):
-                state = random_state.choice(self.label_to_indices[self.test_labels[i].item()])
-                positive_pairs.append([i, state, 1])
-
-
-
-            '''
-            negative_pairs = [[i,
-                               random_state.choice(self.label_to_indices[
-                                                       np.random.choice(
-                                                           list(self.labels_set - set([self.test_labels[i].item()]))
-                                                       )
-                                                   ]),
-                               0]
-                              for i in range(1, len(self.test_data), 2)]
-            '''
+            for i in range(0, len(self.test_data), 8):
+                label_indices = self.label_to_indices[self.test_labels[i].item()]
+                if len(label_indices) <= 1:
+                    continue
+                siamese_index = random_state.choice(label_indices)
+                while siamese_index == i:
+                    siamese_index = np.random.choice(label_indices)
+                if [i, siamese_index, 1] in positive_pairs or [siamese_index, i, 1] in positive_pairs:
+                    continue
+                positive_pairs.append([i, siamese_index, 1])
 
             negative_pairs = []
-            for i in range(1, len(self.test_data), 2):
+            for i in range(1, len(self.test_data), 8):
                 label1 = self.test_labels[i].item()
                 siamese_label = np.random.choice(list(self.labels_set - set([label1])))
                 siamese_index = random_state.choice(self.label_to_indices[siamese_label])
+                if [i, siamese_index, 0] in negative_pairs or [siamese_index, i, 0] in negative_pairs:
+                    continue
                 negative_pairs.append([i, siamese_index, 0])
 
             self.test_pairs = positive_pairs + negative_pairs
             np.random.shuffle(self.test_pairs)
+
+            print('\n**************************Siamese pairs 样 本 量********************************')
+            print('len(self.labels)={}, len(self.datas)={}'.format(len(self.labels), len(self.datas)))
+            print('len(positive_pairs)={}, len(negative_pairs)={}, total_pairs={}'.format(len(positive_pairs), len(negative_pairs), len(self.test_pairs)))
+            print('*******************************************************************************\n')
 
     def __getitem__(self, index):
         if self.train:
@@ -682,9 +775,17 @@ class DataGenerator(keras.utils.Sequence):
         return X, keras.utils.to_categorical(y, num_classes=self.num_class)
 
 
+def show_dataset(dataset):
+    for data in dataset.take(1):
+        images, (labels1, labels2) = data
+        for image in images:
+            cv2.imshow('augment', image.numpy())
+            cv2.waitKey(0)
+
+
 # 直接调用DataIterator的话，跟for循环迭代列表没什么两样
 # 本示例只是验证一下DataIterator代码是否能用。
-if __name__ == '__main__':
+if __name__ == '__main__1':
     from utils import util
     data_path = '/path/to/mnist'
     images_path, images_label = util.get_dataset(data_path)
@@ -700,7 +801,7 @@ if __name__ == '__main__':
 
 
 # 使用自定义的Dataset数据集
-if __name__ == '__main__':
+if __name__ == '__main__2':
     images_path, images_label = util.get_dataset(data_path)
     num_class = len(set(images_label))
     batch_size = 100
@@ -711,7 +812,7 @@ if __name__ == '__main__':
         print(data)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__3':
     '''
     SiameseDataset产生的是siamese图片路径和标签，而DataIterator是迭代加载SiameseDataset的图片和标签。
     使用自定义的SiameseDataset和DataIterator配合产生siamese数据
@@ -727,7 +828,8 @@ if __name__ == '__main__':
         print(images1.shape, images2.shape, label.shape)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__test':
+    raise Exception('废弃')
     data_path = '/home/xiaj/res/mnist'
     train_set, val_set = load_data(data_path)
     train_image_list, train_label_list = get_image_paths_and_labels(train_set)
@@ -757,3 +859,28 @@ if __name__ == '__main__':
         except tf.errors.OutOfRangeError:
             print('end!')
 
+
+if __name__ == '__main__':
+    tf.enable_eager_execution()
+    print('is eager executing: ', tf.executing_eagerly())
+
+    data_path = '/home/xiajun/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44'
+    train_images_path, train_images_label, validation_images_path, validation_images_label = load_dataset(data_path, min_nrof_cls=10, max_nrof_cls=40000, validation_ratio=0.2)
+
+    train_count = len(train_images_path)
+    validation_count = len(validation_images_path)
+    n_classes = len(set(train_images_label))
+    batch_size = 64
+    buffer_size = train_count
+    repeat = 100
+    # initial_epochs = min(repeat, 300)
+    initial_epochs = repeat + 1
+
+    filenames = tf.constant(train_images_path)
+    labels = tf.constant(train_images_label)
+    train_dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
+    train_dataset = train_dataset.map(_tfparse_function_train)
+    train_dataset = train_dataset.shuffle(buffer_size=buffer_size, seed=tf.set_random_seed(666),
+                              reshuffle_each_iteration=True).batch(batch_size).repeat(repeat)
+
+    show_dataset(train_dataset)

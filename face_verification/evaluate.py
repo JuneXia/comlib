@@ -80,6 +80,9 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
 
         tpr = np.mean(tprs, 0)
         fpr = np.mean(fprs, 0)
+        tools.view_bar('calculate_roc: ', fold_idx + 1, nrof_folds)
+    print('')
+
     return tpr, fpr, accuracy
 
 
@@ -127,6 +130,8 @@ def calculate_val(thresholds, embeddings1, embeddings2, actual_issame, far_targe
             threshold = 0.0
 
         val[fold_idx], far[fold_idx] = calculate_val_far(threshold, dist[test_set], actual_issame[test_set])
+        tools.view_bar('calculate_val: ', fold_idx + 1, nrof_folds)
+    print('')
 
     val_mean = np.mean(val)
     far_mean = np.mean(far)
@@ -265,14 +270,14 @@ def get_evaluate_pairs(data_path):
         image_pairs_label.append(labels)
     image_pairs = np.array(image_pairs)
     image_pairs_label = np.array(image_pairs_label)
-
     return image_pairs, image_pairs_label
 
 
 if __name__ == '__main__':
     distance_metric = 0
     if RELEASE:
-        data_path = '/disk1/home/xiaj/res/face/gcface/gc_together/origin_align160_margin32'
+        # data_path = '/disk1/home/xiaj/res/face/gcface/gc_together/origin_align160_margin32'
+        data_path = '/disk1/home/xiaj/res/face/CelebA/Experiment/facenet_mtcnn_align160x160_margin32'
         faceid_models = ['/disk1/home/xiaj/dev/alg_verify/face/facenet/pretrained_model/20180402-114759/20180402-114759.pb']
         models_path = '/disk1/home/xiaj/dev/alg_verify/face/facenet/save_model'
     else:

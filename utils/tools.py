@@ -11,6 +11,7 @@ import matplotlib.patches as mpatches
 from sklearn.metrics import roc_curve, auc
 import shutil
 from sklearn.manifold import TSNE
+import datetime
 
 DEBUG = True
 
@@ -55,6 +56,29 @@ def strcat(strlist, cat_mark=','):
         line += str(ln) + cat_mark
     line = line[0:line.rfind(cat_mark)]
     return line
+
+
+def steps_per_epoch(num_samples, batch_size, allow_less_batsize=True):
+    """
+    :param num_samples: 样本总量
+    :param batch_size:
+    :param allow_less_batsize: True: 允许最后一个step的样本数量小于batch_size;
+                               False: 如果最后一个step的样本数量小于batch_size，则丢弃这一step的样本。
+    :return:
+    """
+    steps = 0
+    steps += num_samples // batch_size
+    if allow_less_batsize:
+        offset = 0 if num_samples % batch_size == 0 else 1
+        steps += offset
+
+    return steps
+
+
+def get_strtime():
+    time_str = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    return time_str
 
 
 def imcrop(img, bbox, scale_ratio=2.0):
