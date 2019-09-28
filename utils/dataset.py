@@ -3,12 +3,14 @@ import os
 import math
 import random
 import cv2
-from scipy import misc
+# from scipy import misc
+import skimage.transform
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.utils import to_categorical
 from utils import tools
+
 
 DEBUG = False
 
@@ -201,7 +203,9 @@ def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per
 
 def random_rotate_image(image):
     angle = np.random.uniform(low=-10.0, high=10.0)
-    return misc.imrotate(image, angle, 'bicubic')
+    # return misc.imrotate(image, angle, 'bicubic')  # scipy.misc 可能已经被弃用，在部分系统中已经无法使用，可使用skimage代替
+    # TODO： 最好还是要解决一下使用scipy.misc调用rotate的问题。 因为skimage不支持输入为tfTensor
+    return skimage.transform.rotate(image.numpy(), angle, order=3, preserve_range=True)
 
 
 def get_control_flag(control, field):
@@ -256,8 +260,8 @@ class ImageParse(object):
     def __init__(self, imshape=(28, 28, 1)):
         self.imshape = imshape
 
-        self.set_train_augment()
-        self.set_validation_augment()
+        self.set_train_augment(random_crop=False)
+        self.set_validation_augment(random_crop=False)
 
     def set_train_augment(self, random_crop=True, random_rotate=True, random_left_right_flip=True, fixed_standardization=True):
         self.train_augment = {ImageParse.RANDOM_CROP: random_crop,
@@ -283,8 +287,8 @@ class ImageParse(object):
         if augments[ImageParse.RANDOM_CROP]:
             image = tf.image.random_crop(image, self.imshape)
         else:
-            # image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
-            image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+            image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+            # image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
 
         if augments[ImageParse.RANDOM_ROTATE]:
             image = tf.py_function(random_rotate_image, [image], tf.uint8)
