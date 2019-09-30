@@ -203,6 +203,25 @@ def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_nu
     return images_info
 
 
+def load_csv(csv_file, start_idx=None, end_idx=None):
+    """
+    读取CSV文件
+    :param csv_file:
+    :param start_idx: 从start_idx这一行开始取数据
+    :param end_idx: 取到end_idx这一行为止
+    :return:
+    """
+    with open(csv_file) as fid:
+        lines = fid.readlines()
+        lines = lines[start_idx:end_idx]
+        csv_info = []
+        for line in lines:
+            csv_info.append(line.strip().split(","))
+
+        csv_info = np.array(csv_info)
+    return csv_info
+
+
 def compute_auc(fpr, tpr):
     roc_auc = auc(fpr, tpr)
     return roc_auc

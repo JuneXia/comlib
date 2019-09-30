@@ -3,7 +3,7 @@ import os
 import math
 import random
 import cv2
-# from scipy import misc
+from scipy import misc
 import skimage.transform
 import numpy as np
 import tensorflow as tf
@@ -78,7 +78,7 @@ data
     images = os.listdir(data_path)
     images.sort()
     if DEBUG:
-        images = images[0:5]
+        images = images[0:500]
     for i, image in enumerate(images):
         cls_path = os.path.join(data_path, image)
         if os.path.isfile(cls_path):
@@ -201,11 +201,16 @@ def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per
     return train_set, val_set
 
 
+
+
+
 def random_rotate_image(image):
     angle = np.random.uniform(low=-10.0, high=10.0)
-    # return misc.imrotate(image, angle, 'bicubic')  # scipy.misc 可能已经被弃用，在部分系统中已经无法使用，可使用skimage代替
-    # TODO： 最好还是要解决一下使用scipy.misc调用rotate的问题。 因为skimage不支持输入为tfTensor
-    return skimage.transform.rotate(image.numpy(), angle, order=3, preserve_range=True)
+    try:
+        return misc.imrotate(image, angle, 'bicubic')  # scipy.misc 可能已经被弃用，在部分系统中已经无法使用，可使用skimage代替
+    except Exception as e:
+        # TODO： 最好还是要解决一下使用scipy.misc调用rotate的问题。 因为skimage不支持输入为tfTensor
+        return skimage.transform.rotate(image.numpy(), angle, order=3, preserve_range=True)
 
 
 def get_control_flag(control, field):
@@ -213,6 +218,7 @@ def get_control_flag(control, field):
 
 
 def _tfparse_function_train(filename, label):
+    raise Exception('已经废弃，迁移至ImageParse')
     # shape = [28, 28, 1]
     shape = [160, 160, 3]
     image = tf.io.read_file(filename)
@@ -234,6 +240,7 @@ def _tfparse_function_train(filename, label):
 
 
 def _tfparse_function_validate(filename, label):
+    raise Exception('已经废弃，迁移至ImageParse')
     # shape = [28, 28, 1]
     shape = [160, 160, 3]
     image = tf.io.read_file(filename)
@@ -260,8 +267,8 @@ class ImageParse(object):
     def __init__(self, imshape=(28, 28, 1)):
         self.imshape = imshape
 
-        self.set_train_augment(random_crop=False)
-        self.set_validation_augment(random_crop=False)
+        self.set_train_augment()
+        self.set_validation_augment()
 
     def set_train_augment(self, random_crop=True, random_rotate=True, random_left_right_flip=True, fixed_standardization=True):
         self.train_augment = {ImageParse.RANDOM_CROP: random_crop,
@@ -287,8 +294,8 @@ class ImageParse(object):
         if augments[ImageParse.RANDOM_CROP]:
             image = tf.image.random_crop(image, self.imshape)
         else:
-            image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
-            # image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+            # image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+            image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
 
         if augments[ImageParse.RANDOM_ROTATE]:
             image = tf.py_function(random_rotate_image, [image], tf.uint8)
@@ -781,10 +788,19 @@ class DataGenerator(keras.utils.Sequence):
 
 def show_dataset(dataset):
     for data in dataset.take(1):
-        images, (labels1, labels2) = data
-        for image in images:
-            cv2.imshow('augment', image.numpy())
+        images, preccessed_images, (labels1, labels2) = data
+        for raw_image, preccessed_image in zip(images, preccessed_images):
+            cv2.imshow('raw_image', raw_image.numpy())
+            cv2.imshow('preccessed_image', preccessed_image.numpy())
             cv2.waitKey(0)
+
+
+def test_parse_function(data):
+    for i in range(1000):
+        data = data / 10
+        data = data * 10
+
+    return data
 
 
 # 直接调用DataIterator的话，跟for循环迭代列表没什么两样
@@ -864,7 +880,7 @@ if __name__ == '__main__test':
             print('end!')
 
 
-if __name__ == '__main__':
+if __name__ == '__main__4':
     tf.enable_eager_execution()
     print('is eager executing: ', tf.executing_eagerly())
 
@@ -879,12 +895,43 @@ if __name__ == '__main__':
     repeat = 100
     # initial_epochs = min(repeat, 300)
     initial_epochs = repeat + 1
+    imparse = ImageParse(imshape=(160, 160, 3))
 
     filenames = tf.constant(train_images_path)
     labels = tf.constant(train_images_label)
     train_dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
-    train_dataset = train_dataset.map(_tfparse_function_train)
+    train_dataset = train_dataset.map(imparse.validation_parse_func)
     train_dataset = train_dataset.shuffle(buffer_size=buffer_size, seed=tf.set_random_seed(666),
                               reshuffle_each_iteration=True).batch(batch_size).repeat(repeat)
 
     show_dataset(train_dataset)
+
+
+if __name__ == '__main__':
+    import time
+
+    tf.enable_eager_execution()
+    print('is eager executing: ', tf.executing_eagerly())
+
+    num_train_samples = 2000
+    batch_size = 2
+    buffer_size = num_train_samples
+    train_steps_per_epoch = num_train_samples // batch_size
+
+    validation_dataset = tf.data.Dataset.from_tensor_slices(np.arange(num_train_samples))
+    validation_dataset = validation_dataset.map(test_parse_function, 4)
+
+    validation_dataset = validation_dataset.shuffle(buffer_size=buffer_size,
+                                                         seed=tf.compat.v1.set_random_seed(666),
+                                                         reshuffle_each_iteration=True).batch(batch_size).repeat()
+
+    while True:
+        start_time = time.time()
+        for i, data in enumerate(validation_dataset):
+            print(data.numpy(), end=' ')
+            if (i != 0) and ((i+1) % train_steps_per_epoch == 0):
+                print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                print('time: ', time.time() - start_time)
+                start_time = time.time()
+                print('\n')
+
