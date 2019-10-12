@@ -78,7 +78,7 @@ data
     images = os.listdir(data_path)
     images.sort()
     if DEBUG:
-        images = images[0:500]
+        images = images[0:900]
     for i, image in enumerate(images):
         cls_path = os.path.join(data_path, image)
         if os.path.isfile(cls_path):
@@ -199,9 +199,6 @@ def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per
         train_set, val_set = dataset, []
 
     return train_set, val_set
-
-
-
 
 
 def random_rotate_image(image):
@@ -803,6 +800,70 @@ def test_parse_function(data):
     return data
 
 
+# 制作、加载用于feed到网络的数据.
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+def make_feedata(datasets, save_file, title_line='\n', filter_cb=None):
+    """
+    制作用于feed到网络的数据.
+    :param datasets: datasets must be a list, and every element in the list must be dict.
+    :param save_file: save the resulting data to save_file.
+    :param title_line: first line write to save_file, just remark.
+    :return:
+    """
+    dataset_keys = ['root_path', 'csv_file']
+    for dataset in datasets:
+        if type(dataset) != dict:
+            raise Exception('datasets must be a list, and every element in the list must be dict.')
+        for key in dataset.keys():
+            if key not in dataset_keys:
+                raise Exception('dataset dict expect {}, but received {}'.format(dataset_keys, key))
+
+    images_info = []
+    for dataset in datasets:
+        imgs_info = tools.load_csv(dataset['csv_file'], start_idx=1)
+        imgs_path = [os.path.join(info[0], info[2]) for info in imgs_info]
+        imgs_info = tools.concat_dataset(dataset['root_path'], imgs_path, imgs_info[:, 1])
+        images_info.extend(imgs_info)
+    images_info = np.array(images_info)
+
+    images_info = tools.config_feedata(images_info, validation_ratio=-1, dup_base=(20, 80), filter_cb=filter_cb)
+
+    tools.save_csv(images_info, save_file, title_line=title_line)
+
+
+def load_feedata(feed_file, shuffle=True):
+    imgs_info = tools.load_csv(feed_file, start_idx=1)
+    if shuffle:
+        np.random.shuffle(imgs_info)
+
+    if False:
+        # 如果feed_file中的数据是按照 'cls_name,image_path'这样的格式排列的，则需要通过下面的方法赋予 label.
+        # ************************************************************
+        images_path = imgs_info[:, 1]
+        labels_name = imgs_info[:, 0]
+        cls_name = set(labels_name)
+        images_label = np.zeros_like(labels_name, dtype=np.int32)
+        for i, cls in enumerate(cls_name):
+            images_label[np.where(labels_name == cls)] = i
+
+            tools.view_bar('load feed data:', i + 1, len(cls_name))
+        print('')
+        # ************************************************************
+    else:
+        train_info = imgs_info[np.where(imgs_info[:, 0] == '0')]
+        validation_info = imgs_info[np.where(imgs_info[:, 0] == '1')]
+
+        train_images_label = train_info[:, 1].astype(np.int32).tolist()
+        train_images_path = train_info[:, 3].tolist()
+
+        validation_images_label = validation_info[:, 1].astype(np.int32).tolist()
+        validation_images_path = validation_info[:, 3].tolist()
+
+    return train_images_path, train_images_label, validation_images_path, validation_images_label
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+
 # 直接调用DataIterator的话，跟for循环迭代列表没什么两样
 # 本示例只是验证一下DataIterator代码是否能用。
 if __name__ == '__main__1':
@@ -907,7 +968,7 @@ if __name__ == '__main__4':
     show_dataset(train_dataset)
 
 
-if __name__ == '__main__':
+if __name__ == '__main__5':
     import time
 
     tf.enable_eager_execution()

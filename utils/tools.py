@@ -13,7 +13,7 @@ import shutil
 from sklearn.manifold import TSNE
 import datetime
 
-DEBUG = True
+DEBUG = False
 
 
 def view_bar(message, num, total):
@@ -123,6 +123,7 @@ def named_standard(data_path, mark='', replace=''):
             print('[tools.named_standard]:: change {} to {}'.format(class_path, new_class_path))
 
         view_bar('[tools.load_image]:: loading: ', i + 1, len(class_list))
+    print('')
 
 
 def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_num_class=False, min_area4del=0):
@@ -211,15 +212,155 @@ def load_csv(csv_file, start_idx=None, end_idx=None):
     :param end_idx: 取到end_idx这一行为止
     :return:
     """
+    print('\n[load_csv]:: load {} '.format(csv_file))
     with open(csv_file) as fid:
         lines = fid.readlines()
         lines = lines[start_idx:end_idx]
         csv_info = []
-        for line in lines:
+        for i, line in enumerate(lines):
             csv_info.append(line.strip().split(","))
+            view_bar('loading:', i + 1, len(lines))
+        print('')
 
         csv_info = np.array(csv_info)
     return csv_info
+
+
+def save_csv(templates, csv_file, title_line='\n'):
+    assert len(templates.shape) >= 2
+    assert len(title_line) >= 1
+    assert title_line[-1] == '\n'
+
+    print('\n[save_csv]:: save {} '.format(csv_file))
+    with open(csv_file, "w") as fid:
+        fid.write(title_line)
+        for i in range(len(templates)):
+            text = strcat(templates[i]) + "\n"
+            fid.write(text)
+            view_bar('saving:', i + 1, len(templates))
+        print('')
+    fid.close()
+
+
+def config_feedata(images_info, label_axis=0, dup_base=(), validation_ratio=0.0, filter_cb=None):
+    """
+    有的时候为了样本均衡，需要对样本量较少的类别进行重复采样。
+    注意：按照本函数思路，仅仅是对原样本进行copy来重复采样。所以在训练之前还应当做数据增强。
+    :param images_info:
+    :param label_axis: 指定images_info中的哪一列是类别标签信息。
+    :param dup_base: 该元组长度只能是1或2，当len(dup_base)=1时，dup2size=dup_base[0];
+        当len(dup_base)=2时，dup2size根据每类样本的数量线性计算得到，计算公司详见代码.
+    :param validation_ratio: 0.0, 不拆分数据集；大于0小于1时，表示按该比例拆分；-1，按代码中的公式线性拆分
+    :param filter_cb: 自定义对每个类别样本的回调函数
+        最终每个类别的数据均衡应该同时满足dup2range和filter_cb这两个限定条件。
+    :return:
+    """
+    VAL_STATE = 1
+    TRAIN_STATE = 0
+    if len(dup_base) == 0:
+        dup2size_func = None
+    elif len(dup_base) == 1:
+        dup2size_func = lambda x: dup_base[0]
+    elif len(dup_base) == 2:
+        # np.random.seed(666)
+        # dup2size_func = lambda x: np.random.randint(dup_base[0], dup_base[1])  # 随机重复抽样到dup2range范围内
+
+        assert (60 > dup_base[0]) and (100 > dup_base[1])
+        dupk = (100-60)/(dup_base[1]-dup_base[0])
+        dupb = 60-dup_base[0]*dupk
+        dup2size_func = lambda x: min(100, int(dupk*x+dupb))
+    else:
+        raise Exception('len(dup_base) just in range [0, 2]!')
+
+    if validation_ratio == 0:
+        val_ratio_func = None
+    elif validation_ratio == -1:
+        valk = (10 - 3) / (350 - 20)
+        valb = 3 - 20 * valk
+        val_ratio_func = lambda x: min(10, int(valk * x + valb))
+    elif (validation_ratio > 0) and (validation_ratio < 1):
+        val_ratio_func = lambda x: min(10, int(x*validation_ratio))
+    else:
+        raise Exception('validation_ratio just equal to -1 or [0, 1)!')
+
+    extend_images_info = []
+    cls_names = set(images_info[:, label_axis])
+    for i, cls in enumerate(cls_names):
+        info = images_info[np.where(images_info[:, label_axis] == cls)]
+        np.random.shuffle(info)
+
+        val_info = []
+        if val_ratio_func is not None:
+            val_size = val_ratio_func(len(info))
+            val_info = info[0:val_size]
+            info = info[val_size:]
+
+        if (dup2size_func is not None) and filter_cb(info):
+            dup2size = dup2size_func(len(info))
+            if len(info) < dup2size:
+                extend_info = []
+                multiple = dup2size // len(info) - 1
+                for m in range(multiple):
+                    extend_info.extend(info)
+
+                extend_info.extend(info[0:dup2size % len(info)])
+                extend_info = np.array(extend_info)
+                info = np.concatenate((info, extend_info))
+
+        if len(val_info) > 0:
+            info = np.concatenate((val_info, info))
+
+        mark = np.zeros((len(info), 1), dtype=np.int32)
+        mark[0:len(val_info)] = VAL_STATE
+        label = np.ones([len(info), 1], dtype=np.int32) * i
+        info = np.hstack((mark, label, info))
+        extend_images_info.extend(info)
+        view_bar('config feed data:', i + 1, len(cls_names))
+    print('')
+    images_info = np.array(extend_images_info)
+
+    return images_info
+
+
+def concat_dataset(root_path, images, label_names):
+    """
+    数据路径拼接思想：root_path/images[i]/label_names[i]
+    :param root_path: 数据根路径
+    :param images: 特定类别的图片子目录，如：201912341.jpg、 subdir/201912341.jpg
+    :param label_names: 在路径中的类别名
+    :return:
+    """
+    print('\n[concat_dataset]:: load {} '.format(root_path))
+    images_info = []
+    imexist_count = 0
+    imexts = ['jpg', 'png']
+    for i, (image, label_name) in enumerate(zip(images, label_names)):
+        imname, imext = image.rsplit('.', maxsplit=1)
+        if imext not in imexts:
+            raise Exception('Only support [jpg, png] currently!')
+
+        imexist = False
+        for ext in imexts:
+            image_path = os.path.join(root_path, imname) + '.' + ext
+            if os.path.exists(image_path):
+                image_info = [label_name, image_path]
+                images_info.append(image_info)
+                imexist = True
+                break
+        if not imexist:
+            imexist_count -= 1
+            print('\t{}/{}.{} is not exist!'.format(root_path, imname, imexts))
+
+        view_bar('loading:', i + 1, len(images))
+    print('')
+
+    images_info = np.array(images_info)
+
+    print('\n***********************************************')
+    print('From {}, not existed images count: {}'.format(root_path, abs(imexist_count)))
+    print('***********************************************\n')
+
+    return images_info
 
 
 def compute_auc(fpr, tpr):
