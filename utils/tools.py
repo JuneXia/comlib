@@ -58,6 +58,16 @@ def strcat(strlist, cat_mark=','):
     return line
 
 
+def sufwith(s, suf):
+    '''
+    将字符串s的后缀改为以suf结尾
+    :param s:
+    :param suf:
+    :return:
+    '''
+    return os.path.splitext(s)[0] + suf
+
+
 def steps_per_epoch(num_samples, batch_size, allow_less_batsize=True):
     """
     :param num_samples: 样本总量
@@ -126,7 +136,7 @@ def named_standard(data_path, mark='', replace=''):
     print('')
 
 
-def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_num_class=False, min_area4del=0):
+def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_num_class=False, min_area4del=0, filter_cb=None):
     '''
     :param data_path:
     :param subdir: 如果每个类别又子目录，则应该指定。
@@ -145,10 +155,19 @@ def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_nu
     for i, cls in enumerate(class_list):
         class_images_info = []
         class_path = os.path.join(data_path, cls)
+        if os.path.isfile(class_path):
+            print('[load_image]:: {} is not dir!'.format(class_path))
+            continue
+
         image_list = os.listdir(class_path)
         image_list.sort()
         for image in image_list:
             image_path = os.path.join(class_path, image)
+            if filter_cb is not None:
+                if not filter_cb(image_path):
+                    print('{} is filtered!'.format(image_path))
+                    continue
+
             if os.path.isdir(image_path):
                 if image == subdir:
                     sub_image_list = os.listdir(image_path)
@@ -366,6 +385,34 @@ def concat_dataset(root_path, images, label_names):
 def compute_auc(fpr, tpr):
     roc_auc = auc(fpr, tpr)
     return roc_auc
+
+
+def compute_iou(bbox1, bbox2):
+    """
+    computing IoU
+    :param bbox1: (x0, y0, x1, y1), which reflects (left, top, right, bottom)
+    :param bbox2: (x0, y0, x1, y1)
+    :return: scala value of IoU
+    """
+    # computing area of each rectangles
+    S_rec1 = (bbox1[3] - bbox1[1]) * (bbox1[2] - bbox1[0])
+    S_rec2 = (bbox2[3] - bbox2[1]) * (bbox2[2] - bbox2[0])
+
+    # computing the sum_area
+    sum_area = S_rec1 + S_rec2
+
+    # find the each edge of intersect rectangle
+    left_line = max(bbox1[0], bbox2[0])
+    right_line = min(bbox1[2], bbox2[2])
+    top_line = max(bbox1[1], bbox2[1])
+    bottom_line = min(bbox1[3], bbox2[3])
+
+    # judge if there is an intersect
+    if left_line >= right_line or top_line >= bottom_line:
+        return 0
+    else:
+        intersect = (right_line - left_line) * (bottom_line - top_line)
+        return (intersect / (sum_area - intersect)) * 1.0
 
 
 def _get_plt_color(index=None):

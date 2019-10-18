@@ -12,7 +12,8 @@ from tensorflow.keras.utils import to_categorical
 from utils import tools
 
 
-DEBUG = False
+DEBUG = True
+MULTI_OUTPUT = False
 
 
 class ImageClass():
@@ -54,7 +55,7 @@ def get_dataset(path, has_class_directories=True):
     return dataset
 
 
-def load_dataset(data_path, shuffle=True, validation_ratio=0.0, min_nrof_cls=1, max_nrof_cls=999999999):
+def load_dataset(data_path, shuffle=True, validation_ratio=0.0, min_nrof_cls=1, max_nrof_cls=999999999, filter_cb=None):
     '''
 data_path dir style:
 data
@@ -73,18 +74,19 @@ data
     :param max_nrof_cls: max number samples of each class
     :return:
     '''
+    label_count = 0
     images_path = []
     images_label = []
     images = os.listdir(data_path)
     images.sort()
     if DEBUG:
-        images = images[0:900]
+        images = images[0:50]
     for i, image in enumerate(images):
         cls_path = os.path.join(data_path, image)
         if os.path.isfile(cls_path):
             print('[load_dataset]:: {} is not dir!'.format(cls_path))
             continue
-            
+
         imgs = os.listdir(cls_path)
         if len(imgs) < min_nrof_cls:
             continue
@@ -92,8 +94,12 @@ data
             np.random.shuffle(imgs)
             imgs = imgs[0:max_nrof_cls]
 
-        images_path.extend([os.path.join(data_path, image, img) for img in imgs])
-        images_label.extend([i] * len(imgs))
+        imgs = [os.path.join(data_path, image, img) for img in imgs]
+        if filter_cb is not None:
+            imgs = filter_cb(imgs)
+        images_path.extend(imgs)
+        images_label.extend([label_count] * len(imgs))
+        label_count += 1
         tools.view_bar('loading: ', i + 1, len(images))
     print('')
 
@@ -261,8 +267,14 @@ class ImageParse(object):
     RANDOM_COLOR = 64
     FIXED_CONTRACT = 128
 
-    def __init__(self, imshape=(28, 28, 1)):
+    def __init__(self, imshape=(28, 28, 1), n_classes=None):
+        '''
+        :param imshape:
+        :param n_classes: when n_classes is None, not using one-hot encode;
+        when n_classes > 0, using one-hot encode.
+        '''
         self.imshape = imshape
+        self.n_classes = n_classes
 
         self.set_train_augment()
         self.set_validation_augment()
@@ -294,8 +306,12 @@ class ImageParse(object):
             # image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
             image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
 
+        # image = (tf.cast(image, tf.float32) - 127.5) / 128.0
+        # return image
+
         if augments[ImageParse.RANDOM_ROTATE]:
-            image = tf.py_function(random_rotate_image, [image], tf.uint8)
+            # image = tf.py_function(random_rotate_image, [image], tf.uint8)
+            image = tf.py_function(random_rotate_image, [image], tf.float32)
 
         # image = tf.image.random_brightness(image, 0.4)
         # image = tf.image.random_contrast(image, 0.8, 2)
@@ -314,13 +330,25 @@ class ImageParse(object):
         image = self._imdecode(filename)
         image = self._image_augment(image, self.train_augment)
 
-        return image, (label, label)
+        if self.n_classes is not None:
+            label = tf.one_hot(label, depth=self.n_classes)
+
+        if MULTI_OUTPUT:
+            return image, (label, label)
+        else:
+            return image, label
 
     def validation_parse_func(self, filename, label):
         image = self._imdecode(filename)
         image = self._image_augment(image, self.validation_augment)
 
-        return image, (label, label)
+        if self.n_classes is not None:
+            label = tf.one_hot(label, depth=self.n_classes)
+
+        if MULTI_OUTPUT:
+            return image, (label, label)
+        else:
+            return image, label
 
 
 class DataSet(object):
@@ -785,11 +813,15 @@ class DataGenerator(keras.utils.Sequence):
 
 def show_dataset(dataset):
     for data in dataset.take(1):
-        images, preccessed_images, (labels1, labels2) = data
-        for raw_image, preccessed_image in zip(images, preccessed_images):
-            cv2.imshow('raw_image', raw_image.numpy())
-            cv2.imshow('preccessed_image', preccessed_image.numpy())
-            cv2.waitKey(0)
+        (images, proccessed_images), (labels1, labels2) = data
+        for i, (raw_image, preccessed_image) in enumerate(zip(images, proccessed_images)):
+            cv2.imwrite(str(i)+'_tmp_raw_image.jpg', raw_image.numpy())
+            cv2.imwrite(str(i)+'_tmp_proccessed.jpg', preccessed_image.numpy())
+            # cv2.imshow('raw_image', raw_image.numpy())
+            # cv2.imshow('preccessed_image', preccessed_image.numpy())
+            # cv2.waitKey(0)
+            print('cv2.imwrite: {}/{}'.format(i, len(images)))
+        print('epoch end!')
 
 
 def test_parse_function(data):
@@ -861,7 +893,6 @@ def load_feedata(feed_file, shuffle=True):
 
     return train_images_path, train_images_label, validation_images_path, validation_images_label
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 
 
 # 直接调用DataIterator的话，跟for循环迭代列表没什么两样
@@ -941,18 +972,20 @@ if __name__ == '__main__test':
             print('end!')
 
 
-if __name__ == '__main__4':
+if __name__ == '__main__4':  # 检查显示ImageParse增强后的图片
     tf.enable_eager_execution()
     print('is eager executing: ', tf.executing_eagerly())
 
-    data_path = '/home/xiajun/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44'
+    # data_path = '/home/xiajun/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44'
+    # data_path = '/disk1/home/xiaj/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44'
+    data_path = '/disk2/res/VGGFace2/Experiment/mtcnn_align182x182_margin44'
     train_images_path, train_images_label, validation_images_path, validation_images_label = load_dataset(data_path, min_nrof_cls=10, max_nrof_cls=40000, validation_ratio=0.2)
 
     train_count = len(train_images_path)
     validation_count = len(validation_images_path)
     n_classes = len(set(train_images_label))
     batch_size = 64
-    buffer_size = train_count
+    buffer_size = min(train_count, 1000)
     repeat = 100
     # initial_epochs = min(repeat, 300)
     initial_epochs = repeat + 1
@@ -961,38 +994,41 @@ if __name__ == '__main__4':
     filenames = tf.constant(train_images_path)
     labels = tf.constant(train_images_label)
     train_dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
-    train_dataset = train_dataset.map(imparse.validation_parse_func)
+    train_dataset = train_dataset.map(imparse.train_parse_func)
     train_dataset = train_dataset.shuffle(buffer_size=buffer_size, seed=tf.set_random_seed(666),
                               reshuffle_each_iteration=True).batch(batch_size).repeat(repeat)
 
     show_dataset(train_dataset)
 
 
-if __name__ == '__main__5':
+if __name__ == '__main__':  # 检验一下tf.data.Dataset.shuffle的reshuffle_each_iteration参数效果
     import time
 
     tf.enable_eager_execution()
     print('is eager executing: ', tf.executing_eagerly())
 
-    num_train_samples = 2000
-    batch_size = 2
-    buffer_size = num_train_samples
+    num_train_samples = 100
+    train_dataset = np.arange(num_train_samples)
+    batch_size = 5
+    buffer_size = min(num_train_samples, 20)
     train_steps_per_epoch = num_train_samples // batch_size
 
-    validation_dataset = tf.data.Dataset.from_tensor_slices(np.arange(num_train_samples))
-    validation_dataset = validation_dataset.map(test_parse_function, 4)
+    train_dataset = tf.data.Dataset.from_tensor_slices(train_dataset)
+    train_dataset = train_dataset.map(test_parse_function, 4)
 
-    validation_dataset = validation_dataset.shuffle(buffer_size=buffer_size,
-                                                         seed=tf.compat.v1.set_random_seed(666),
-                                                         reshuffle_each_iteration=True).batch(batch_size).repeat()
+    train_dataset = train_dataset.shuffle(buffer_size=buffer_size,
+                                          seed=tf.compat.v1.set_random_seed(666),
+                                          reshuffle_each_iteration=True).batch(batch_size).repeat()
 
     while True:
         start_time = time.time()
-        for i, data in enumerate(validation_dataset):
+        for i, data in enumerate(train_dataset):
             print(data.numpy(), end=' ')
-            if (i != 0) and ((i+1) % train_steps_per_epoch == 0):
-                print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-                print('time: ', time.time() - start_time)
-                start_time = time.time()
-                print('\n')
+            if (i+1) * batch_size >= num_train_samples:
+                print('debug')
+            # if (i != 0) and ((i+1) % train_steps_per_epoch == 0):
+            #     print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+            #     print('time: ', time.time() - start_time)
+            #     start_time = time.time()
+            #     print('\n')
 
