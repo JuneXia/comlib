@@ -187,6 +187,48 @@ def get_image_paths_and_labels(dataset, shuffle=False):
     return image_paths_flat, labels_flat
 
 
+def recurse_load(datas_path):
+    '''
+    递归加载数据集
+    :param datas_path:
+    :return:
+    '''
+    def _recurse_load(datas_path):
+        '''
+        这个嵌套函数和外层函数是一样的，之所以用嵌套写法只是为了能在最外层打印总体进度而已。
+        '''
+        recv_datas = []
+        data_list = os.listdir(datas_path)
+        for i, dat in enumerate(data_list):
+            datpath = os.path.join(datas_path, dat)
+            if dat == '22482232@N00':
+                print('find {}'.format(datpath))
+            if os.path.isdir(datpath):
+                datas = _recurse_load(datpath)
+                recv_datas.extend(datas)
+            else:
+                recv_datas.append(datpath)
+        return recv_datas
+
+    recv_datas = []
+    data_list = os.listdir(datas_path)
+    if DEBUG:
+        data_list = data_list[0:5]
+
+    for i, dat in enumerate(data_list):
+        if dat == '224':
+            print('find {}'.format(dat))
+        datpath = os.path.join(datas_path, dat)
+        if os.path.isdir(datpath):
+            datas = _recurse_load(datpath)
+            recv_datas.extend(datas)
+        else:
+            recv_datas.append(datpath)
+        tools.view_bar('Recursive loading: ', i + 1, len(data_list))
+    # print('')
+    return recv_datas
+
+
 def load_data(data_dir, validation_set_split_ratio=0.05, min_nrof_val_images_per_class=0):
     raise Exception('废弃，可以使用dataset.py下的load_dataset或者utils/tools.py下的load_images')
 
@@ -832,6 +874,86 @@ def test_parse_function(data):
     return data
 
 
+def config_feedata(images_info, label_axis=0, dup_base=(), validation_ratio=0.0, filter_cb=None):
+    """
+    有的时候为了样本均衡，需要对样本量较少的类别进行重复采样。
+    注意：按照本函数思路，仅仅是对原样本进行copy来重复采样。所以在训练之前还应当做数据增强。
+    :param images_info:
+    :param label_axis: 指定images_info中的哪一列是类别标签信息。
+    :param dup_base: 该元组长度只能是1或2，当len(dup_base)=1时，dup2size=dup_base[0];
+        当len(dup_base)=2时，dup2size根据每类样本的数量线性计算得到，计算公式详见代码.
+    :param validation_ratio: 0.0, 不拆分数据集；大于0小于1时，表示按该比例拆分；-1，按代码中的公式线性拆分
+    :param filter_cb: 自定义对每个类别样本的回调函数
+        最终每个类别的数据均衡应该同时满足dup2range和filter_cb这两个限定条件。
+    :return:
+    """
+    VAL_STATE = 1
+    TRAIN_STATE = 0
+    if len(dup_base) == 0:
+        dup2size_func = None
+    elif len(dup_base) == 1:
+        dup2size_func = lambda x: dup_base[0]
+    elif len(dup_base) == 2:
+        # np.random.seed(666)
+        # dup2size_func = lambda x: np.random.randint(dup_base[0], dup_base[1])  # 随机重复抽样到dup2range范围内
+
+        assert (60 > dup_base[0]) and (100 > dup_base[1])
+        dupk = (100-60)/(dup_base[1]-dup_base[0])
+        dupb = 60-dup_base[0]*dupk
+        dup2size_func = lambda x: min(100, int(dupk*x+dupb))
+    else:
+        raise Exception('len(dup_base) just in range [0, 2]!')
+
+    if validation_ratio == 0:
+        val_ratio_func = None
+    elif validation_ratio == -1:
+        valk = (10 - 3) / (350 - 20)
+        valb = 3 - 20 * valk
+        val_ratio_func = lambda x: min(10, int(valk * x + valb))
+    elif (validation_ratio > 0) and (validation_ratio < 1):
+        val_ratio_func = lambda x: min(10, int(x*validation_ratio))
+    else:
+        raise Exception('validation_ratio just equal to -1 or [0, 1)!')
+
+    extend_images_info = []
+    cls_names = set(images_info[:, label_axis])
+    for i, cls in enumerate(cls_names):
+        info = images_info[np.where(images_info[:, label_axis] == cls)]
+        np.random.shuffle(info)
+
+        val_info = []
+        if val_ratio_func is not None:
+            val_size = val_ratio_func(len(info))
+            val_info = info[0:val_size]
+            info = info[val_size:]
+
+        if (dup2size_func is not None) and filter_cb(info):
+            dup2size = dup2size_func(len(info))
+            if len(info) < dup2size:
+                extend_info = []
+                multiple = dup2size // len(info) - 1
+                for m in range(multiple):
+                    extend_info.extend(info)
+
+                extend_info.extend(info[0:dup2size % len(info)])
+                extend_info = np.array(extend_info)
+                info = np.concatenate((info, extend_info))
+
+        if len(val_info) > 0:
+            info = np.concatenate((val_info, info))
+
+        mark = np.zeros((len(info), 1), dtype=np.int32)
+        mark[0:len(val_info)] = VAL_STATE
+        label = np.ones([len(info), 1], dtype=np.int32) * i
+        info = np.hstack((mark, label, info))
+        extend_images_info.extend(info)
+        tools.view_bar('config feed data:', i + 1, len(cls_names))
+    print('')
+    images_info = np.array(extend_images_info)
+
+    return images_info
+
+
 # 制作、加载用于feed到网络的数据.
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 def make_feedata(datasets, save_file, title_line='\n', filter_cb=None):
@@ -858,7 +980,7 @@ def make_feedata(datasets, save_file, title_line='\n', filter_cb=None):
         images_info.extend(imgs_info)
     images_info = np.array(images_info)
 
-    images_info = tools.config_feedata(images_info, validation_ratio=-1, dup_base=(20, 80), filter_cb=filter_cb)
+    images_info = config_feedata(images_info, validation_ratio=-1, dup_base=(20, 80), filter_cb=filter_cb)
 
     tools.save_csv(images_info, save_file, title_line=title_line)
 

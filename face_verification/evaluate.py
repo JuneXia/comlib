@@ -5,7 +5,7 @@ import argparse
 import math
 import numpy as np
 
-RELEASE = False
+RELEASE = True
 if RELEASE:
     sys.path.append('/disk1/home/xiaj/dev/FlaskFace_debug')
 else:
@@ -273,6 +273,47 @@ def get_evaluate_pairs(data_path):
     return image_pairs, image_pairs_label
 
 
+if __name__ == '__main__1':  # 使用CelebA等数据集测试并绘制所有模型的ROC曲线
+    distance_metric = 0
+    if RELEASE:
+        # data_path = '/disk1/home/xiaj/res/face/gcface/gc_together/origin_align160_margin32'
+        data_path = '/disk1/home/xiaj/res/face/CelebA/Experiment/facenet_mtcnn_align160x160_margin32'
+        faceid_models = ['/disk1/home/xiaj/dev/alg_verify/face/facenet/pretrained_model/20180402-114759/20180402-114759.pb']
+        models_path = '/disk1/home/xiaj/dev/alg_verify/face/facenet/save_model'
+    else:
+        data_path = '/home/xiajun/dataset/gc_together/origin_gen90_align160_margin32'
+        faceid_models = ['/home/xiajun/dev/facerec/facenet/mydataset/models/20180402-114759']
+        models_path = '/home/xiajun/dev/alg_verify/face/facenet/save_model'
+
+    image_pairs, image_pairs_label = get_evaluate_pairs(data_path)
+    models = get_models(models_path, rmblank=False)
+    # models = models[0:1]
+    faceid_models.extend(models)
+
+    eval_infos = model_evaluate(faceid_models, image_pairs, distance_metric)
+
+    eval_pairs_info = ''
+    cls_label = set(image_pairs_label)
+    eval_pairs_info = ['{}:{}'.format(cls, len(np.where(image_pairs_label == cls)[0])) for cls in cls_label]
+    eval_pairs_info = tools.strcat(eval_pairs_info, cat_mark=', ')
+
+    tprs = []
+    fprs = []
+    show_labels = []
+    for info in eval_infos:
+        tprs.append(info['tpr'])
+        fprs.append(info['fpr'])
+        val = '%.4f±%.3f' % (info['val'], info['val_std'])
+        acc = info['acc']
+        acc = '%.4f±%.3f' % (acc.mean(), acc.std())
+        auc = '%.4f' % info['auc']
+        far = '%.6f' % info['far']
+        show_label = tools.strcat([info['model_name'], acc, auc, val, far], cat_mark=' : ')
+        show_labels.append(show_label)
+        print(show_label)
+    tools.plt_roc(fprs, tprs, show_labels, interpret_label='model:acc±acc_std:auc:val±val_std:far\n'+eval_pairs_info, save_path='./roc.jpg')
+
+
 if __name__ == '__main__':
     distance_metric = 0
     if RELEASE:
@@ -312,6 +353,8 @@ if __name__ == '__main__':
         show_labels.append(show_label)
         print(show_label)
     tools.plt_roc(fprs, tprs, show_labels, interpret_label='model:acc±acc_std:auc:val±val_std:far\n'+eval_pairs_info, save_path='./roc.jpg')
+
+
 
 
 
