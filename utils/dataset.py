@@ -12,7 +12,7 @@ from tensorflow.keras.utils import to_categorical
 from utils import tools
 
 
-DEBUG = True
+DEBUG = False
 MULTI_OUTPUT = False
 
 
@@ -338,6 +338,7 @@ class ImageParse(object):
     def _imdecode(self, filename):
         image = tf.io.read_file(filename)
         image = tf.image.decode_image(image, self.imshape[2])
+        # image = tf.image.decode_png(image, 3)
         # image = tf.convert_to_tensor(image, dtype=tf.float32)
         return image
 
@@ -357,6 +358,16 @@ class ImageParse(object):
 
         # image = tf.image.random_brightness(image, 0.4)
         # image = tf.image.random_contrast(image, 0.8, 2)
+        # image = tf.image.resize_images(image, (self.imshape[0]+10, self.imshape[1]-10), align_corners=True, preserve_aspect_ratio=True)
+
+        # rand_w = tf.random_uniform([], 172, 192, dtype=tf.int32)
+        # rand_h = tf.random_uniform([], 172, 192, dtype=tf.int32)
+        #
+        # image = tf.image.resize_images(image, (rand_w, rand_h), align_corners=False,
+        #                                        preserve_aspect_ratio=False)  # 如果preserve_aspect_ratio为True，则保持宽高比对原图进行缩放，缩放后的图像宽或高等于image_size中的最小值
+        # image = tf.cast(image, dtype=tf.uint8)
+        #
+        # return image
 
         if augments[ImageParse.RANDOM_LEFT_RIGHT_FLIP]:
             image = tf.image.random_flip_left_right(image)
@@ -708,6 +719,18 @@ class TFSiameseDataset(tf.data.Dataset):
         super(TFSiameseDataset, self).__init__()
 
 
+def tmp_sample_balance(positive_pairs, negative_pairs):
+    np.random.shuffle(positive_pairs)
+    np.random.shuffle(negative_pairs)
+    offset = len(positive_pairs) - len(negative_pairs)
+    if offset < 0:
+        negative_pairs = negative_pairs[-offset:]
+    else:
+        positive_pairs = positive_pairs[offset:]
+
+    return positive_pairs, negative_pairs
+
+
 class SiameseDataset(object):
     """
     Train: For each sample creates randomly a positive or a negative pair
@@ -742,7 +765,7 @@ class SiameseDataset(object):
             random_state = np.random.RandomState(29)
 
             positive_pairs = []
-            for i in range(0, len(self.test_data), 8):
+            for i in range(0, len(self.test_data), 1):
                 label_indices = self.label_to_indices[self.test_labels[i].item()]
                 if len(label_indices) <= 1:
                     continue
@@ -754,13 +777,15 @@ class SiameseDataset(object):
                 positive_pairs.append([i, siamese_index, 1])
 
             negative_pairs = []
-            for i in range(1, len(self.test_data), 8):
+            for i in range(1, len(self.test_data), 1):
                 label1 = self.test_labels[i].item()
                 siamese_label = np.random.choice(list(self.labels_set - set([label1])))
                 siamese_index = random_state.choice(self.label_to_indices[siamese_label])
                 if [i, siamese_index, 0] in negative_pairs or [siamese_index, i, 0] in negative_pairs:
                     continue
                 negative_pairs.append([i, siamese_index, 0])
+
+            positive_pairs, negative_pairs = tmp_sample_balance(positive_pairs, negative_pairs)
 
             self.test_pairs = positive_pairs + negative_pairs
             np.random.shuffle(self.test_pairs)
@@ -897,10 +922,12 @@ def config_feedata(images_info, label_axis=0, dup_base=(), validation_ratio=0.0,
         # np.random.seed(666)
         # dup2size_func = lambda x: np.random.randint(dup_base[0], dup_base[1])  # 随机重复抽样到dup2range范围内
 
-        assert (60 > dup_base[0]) and (100 > dup_base[1])
-        dupk = (100-60)/(dup_base[1]-dup_base[0])
-        dupb = 60-dup_base[0]*dupk
-        dup2size_func = lambda x: min(100, int(dupk*x+dupb))
+        base_x1 = 100
+        base_x2 = 200
+        assert (base_x1 > dup_base[0]) and (base_x2 > dup_base[1])
+        dupk = (base_x2-dup_base[1])/(base_x1-dup_base[0])
+        dupb = base_x2-base_x1*dupk
+        dup2size_func = lambda x: min(base_x2, int(dupk*x+dupb))
     else:
         raise Exception('len(dup_base) just in range [0, 2]!')
 
@@ -921,23 +948,31 @@ def config_feedata(images_info, label_axis=0, dup_base=(), validation_ratio=0.0,
         info = images_info[np.where(images_info[:, label_axis] == cls)]
         np.random.shuffle(info)
 
+        if len(info) < 5:
+            print('debug')
+
         val_info = []
         if val_ratio_func is not None:
             val_size = val_ratio_func(len(info))
             val_info = info[0:val_size]
             info = info[val_size:]
 
-        if (dup2size_func is not None) and filter_cb(info):
-            dup2size = dup2size_func(len(info))
-            if len(info) < dup2size:
-                extend_info = []
-                multiple = dup2size // len(info) - 1
-                for m in range(multiple):
-                    extend_info.extend(info)
+        if dup2size_func is not None:
+            if filter_cb is None or (filter_cb is not None and filter_cb(info)):
+                dup2size = dup2size_func(len(info))
+                if len(info) < dup2size:
+                    extend_info = []
 
-                extend_info.extend(info[0:dup2size % len(info)])
-                extend_info = np.array(extend_info)
-                info = np.concatenate((info, extend_info))
+                    if len(info) == 0:
+                        print('debug')
+
+                    multiple = dup2size // len(info) - 1
+                    for m in range(multiple):
+                        extend_info.extend(info)
+
+                    extend_info.extend(info[0:dup2size % len(info)])
+                    extend_info = np.array(extend_info)
+                    info = np.concatenate((info, extend_info))
 
         if len(val_info) > 0:
             info = np.concatenate((val_info, info))
@@ -980,13 +1015,14 @@ def make_feedata(datasets, save_file, title_line='\n', filter_cb=None):
         images_info.extend(imgs_info)
     images_info = np.array(images_info)
 
-    images_info = config_feedata(images_info, validation_ratio=-1, dup_base=(20, 80), filter_cb=filter_cb)
+    # images_info = config_feedata(images_info, validation_ratio=-1, dup_base=(20, 80), filter_cb=filter_cb)
+    images_info = config_feedata(images_info, validation_ratio=-1, dup_base=(80, 180), filter_cb=filter_cb)
 
     tools.save_csv(images_info, save_file, title_line=title_line)
 
 
-def load_feedata(feed_file, shuffle=True):
-    imgs_info = tools.load_csv(feed_file, start_idx=1)
+def load_feedata(feed_file, shuffle=True, start_idx=1, end_idx=None, all4train=False):
+    imgs_info = tools.load_csv(feed_file, start_idx=start_idx, end_idx=end_idx)  # , end_idx=10000
     if shuffle:
         np.random.shuffle(imgs_info)
 
@@ -1012,6 +1048,18 @@ def load_feedata(feed_file, shuffle=True):
 
         validation_images_label = validation_info[:, 1].astype(np.int32).tolist()
         validation_images_path = validation_info[:, 3].tolist()
+
+        if all4train:
+            train_images_path = train_images_path + validation_images_path
+            train_images_label = train_images_label + validation_images_label
+            validation_images_path = []
+            validation_images_label = []
+
+            if shuffle:
+                image_label = np.array([train_images_label, train_images_path]).transpose()
+                np.random.shuffle(image_label)
+                train_images_label = image_label[:, 0].astype(np.int32).tolist()
+                train_images_path = image_label[:, 1].tolist()
 
     return train_images_path, train_images_label, validation_images_path, validation_images_label
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -1123,7 +1171,7 @@ if __name__ == '__main__4':  # 检查显示ImageParse增强后的图片
     show_dataset(train_dataset)
 
 
-if __name__ == '__main__':  # 检验一下tf.data.Dataset.shuffle的reshuffle_each_iteration参数效果
+if __name__ == '__main__5':  # 检验一下tf.data.Dataset.shuffle的reshuffle_each_iteration参数效果
     import time
 
     tf.enable_eager_execution()
@@ -1153,4 +1201,141 @@ if __name__ == '__main__':  # 检验一下tf.data.Dataset.shuffle的reshuffle_ea
             #     print('time: ', time.time() - start_time)
             #     start_time = time.time()
             #     print('\n')
+
+
+def dup_sampling_check_happyjuzi(info):
+    if len(info) > 200:
+        return False
+
+    marks = ['happyjuzi_mainland', 'happyjuzi_HongkongTaiwan', 'happyjuzi_JapanKorea']
+    # samples_info = []
+    for dat in info:
+        if 'VGGFace2' in dat[-1]:
+            # 不对VGGFace2数据集进行重复抽样
+            if len(info) < 60:
+                print('include VGGFace2: but len(info):{} < 60\n'.format(len(info)))
+                print('************************************************************')
+                print(info)
+                print('************************************************************')
+                return True
+            else:
+                return False
+
+        findit = False
+        for mark in marks:
+            if mark in dat[-1]:
+                findit = True
+                # samples_info.append(dat)
+                break
+        if not findit:
+            raise Exception('Only support dataset: {}'.format(marks))
+
+    # samples_info = np.array(samples_info)
+    # return samples_info
+    return True
+
+
+def dup_sampling_check_gcface(info):
+    if len(info) > 200:
+        return False
+
+    marks = []
+    # samples_info = []
+    for dat in info:
+        if 'VGGFace2' in dat[-1]:
+            # 不对VGGFace2数据集进行重复抽样
+            if len(info) < 60:
+                print('include VGGFace2: but len(info):{} < 60\n'.format(len(info)))
+                print('************************************************************')
+                print(info)
+                print('************************************************************')
+                return True
+            else:
+                return False
+
+        findit = False
+        for mark in marks:
+            if mark in dat[-1]:
+                findit = True
+                # samples_info.append(dat)
+                break
+        if not findit:
+            raise Exception('Only support dataset: {}'.format(marks))
+
+    # samples_info = np.array(samples_info)
+    # return samples_info
+    return True
+
+
+def make_feedata_from_gcface(data_path, save_file, title_line='\n'):
+    images_list = tools.load_image(data_path, subdir='', min_num_image_per_class=5, del_under_min_num_class=False, min_area4del=0)
+
+    images_info = []
+    for info in images_list:
+        label_name = 'gcface_' + info[0]
+        image_path = os.path.join(data_path, info[0], info[1])
+        images_info.append([label_name, image_path])
+    images_info = np.array(images_info)
+
+    images_info = config_feedata(images_info, validation_ratio=0, dup_base=(80, 180), filter_cb=None)
+
+    tools.save_csv(images_info, save_file, title_line=title_line)
+
+
+def make_feedata_from_CASIAFaceV5(data_path, save_file, title_line='\n'):
+    images_list = tools.load_image(data_path, subdir='', min_num_image_per_class=4, del_under_min_num_class=False, min_area4del=0)
+
+    images_info = []
+    for info in images_list:
+        label_name = 'CASIAFaceV5_' + info[0]
+        image_path = os.path.join(data_path, info[0], info[1])
+        images_info.append([label_name, image_path])
+    images_info = np.array(images_info)
+
+    images_info = config_feedata(images_info, validation_ratio=0, dup_base=(80, 180), filter_cb=None)
+
+    tools.save_csv(images_info, save_file, title_line=title_line)
+
+
+if __name__ == '__main__':
+    data_path = '/disk1/home/xiaj/res/face/gcface/duopler/clean/20190912-cleaned-mtcnn_align182x182_margin44'
+    make_feedata_from_gcface(data_path, 'gcface.csv', title_line='train_val,label,person_name,image_path\n')
+
+    # data_path = '/disk2/res/CASIA-FaceV5/CASIA-FaceV5-000-499-mtcnn_align182x182_margin44'
+    # make_feedata_from_CASIAFaceV5(data_path, 'CASIA-FaceV5.csv', title_line='train_val,label,person_name,image_path\n')
+
+
+if __name__ == '__main__7':  # 加载facenet训练所需要的数据集
+    # train_dataset = [{'root_path': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44',
+    #                   'csv_file': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/VGGFace2_cleaned_with_happyjuzi_mainland.csv'},
+    #                  {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_mainland_cleaning',
+    #                   'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_mainland_cleaned.csv'},
+    #                  ]
+
+    # train_dataset = [{# 'root_path': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44',
+    #                   'root_path': '/disk2/res/VGGFace2/Experiment/mtcnn_align182x182_margin44',
+    #                   'csv_file': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/VGGFace2_cleaned_with_happyjuzi_mainland_HongkongTaiwan.csv'},
+    #
+    #                  {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_mainland_cleaning',
+    #                   'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_mainland_cleaned-while_include_HkTw.csv'},
+    #
+    #                  {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_HongkongTaiwan_cleaning',
+    #                   'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_HongkongTaiwan_cleaned.csv'},
+    #                  ]
+
+    train_dataset = [
+                     # {  # 'root_path': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/mtcnn_align182x182_margin44',
+                     # 'root_path': '/disk2/res/VGGFace2/Experiment/mtcnn_align182x182_margin44',
+                     # 'csv_file': '/disk1/home/xiaj/res/face/VGGFace2/Experiment/VGGFace2_cleaned_with_happyjuzi_mainland_HongkongTaiwan_JapanKorea.csv'},
+                     {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_mainland_cleaning',
+                      'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_mainland_cleaned_after_clean_HKTwJaKo.csv'},
+                     {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_HongkongTaiwan_cleaning',
+                      'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_HongkongTaiwan_cleaned_after_clean_HkTwJaKo.csv'},
+                     {'root_path': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/mtcnn_align182x182_margin44_happyjuzi_JapanKorea_cleaning',
+                      'csv_file': '/disk1/home/xiaj/res/face/GC-WebFace/Experiment/happyjuzi_JapanKorea_cleaned_after_clean_HkTwJaKo.csv'},
+    ]
+
+    make_feedata(train_dataset, 'tmp3_vggfromdisk2.csv', title_line='train_val,label,person_name,image_path\n', filter_cb=dup_sampling_check_happyjuzi)
+    # datset.load_feedata('tmp2.csv')
+
 

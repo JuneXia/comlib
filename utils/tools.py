@@ -5,7 +5,7 @@ import skimage
 import cv2
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')  # InsightFace_TF运行时会报错：ImportError: Cannot load backend 'TkAgg' which requires the 'tk' interactive framework, as 'headless' is currently running
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from sklearn.metrics import roc_curve, auc
@@ -205,7 +205,9 @@ def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_nu
 
                 class_images_info.append([cls, image])
 
-        if del_under_min_num_class and len(class_images_info) < min_num_image_per_class:
+        if len(class_images_info) >= min_num_image_per_class:
+            images_info.extend(class_images_info)
+        elif del_under_min_num_class:
             if os.path.exists(class_path):
                 del_count += 1
                 shutil.rmtree(class_path)
@@ -216,7 +218,8 @@ def load_image(data_path, subdir='', min_num_image_per_class=1, del_under_min_nu
             # shutil.rmtree(class_path)
             print('[tools.load_image]:: delete: {} image, {}'.format(len(class_images_info), class_path))
         else:
-            images_info.extend(class_images_info)
+            # raise Exception('为什么会出现这种情况，排查一下！！！！')
+            pass
 
         view_bar('[tools.load_image]:: loading: ', i + 1, len(class_list))
     print('')
@@ -576,13 +579,16 @@ def _get_plt_style(index=None):
     return color, linestyle, marker
 
 
-def plt_roc(fprs, tprs, show_labels, interpret_label='', save_path=None):
+def plt_roc(fprs, tprs, show_labels, thresholds=list(), interpret_label='', save_path=None):
     plt.figure(figsize=(10, 10))
 
     for i, (fpr, tpr, show_label) in enumerate(zip(fprs, tprs, show_labels)):
         color, linestyle, marker = _get_plt_style(i)
+        if len(thresholds) > 0:
+            for j, (fp, tp, thr) in enumerate(zip(fpr, tpr, thresholds[i])):
+                plt.text(fp, tp, '%.4f' % thr, color=color, ha='center', va='bottom', fontsize=9)
 
-        plt.plot(fpr, tpr, color=color, linewidth=1, linestyle=linestyle, marker=marker, label=show_label)
+        plt.plot(fpr, tpr, 'o', color=color, linewidth=1, linestyle=linestyle, marker=marker, label=show_label)
 
     plt.xlabel(r'$\rm{fpr}$', fontsize=16)
     plt.ylabel(r'$\rm{tpr}$', fontsize=16)
@@ -617,6 +623,29 @@ def plot_embedding(data, label, title, save_path=None):
     # plt.legend()  # 显示图例
     if save_path is not None:
         plt.savefig(save_path)
+    plt.show()
+
+
+def plt_curve(x, y, xlab='xlab', ylab='ylab', title='title', text='text', savefig=None):
+    """
+    使用plt画曲线图，x,y都是数组
+    :param x: x是横坐标
+    :param y: y是纵坐标
+    :param xlab: 横坐标名称
+    :param ylab: 纵坐标名称
+    :param title: 标题名称
+    :param text: 曲线名称
+    :param savefig: 曲线文件保存目录
+    :return:
+    """
+    plt.plot(x, y, 'r', linewidth=2)
+    plt.xlabel(xlab, fontsize=16)
+    plt.ylabel(ylab, fontsize=16)
+    plt.title(title, fontsize=16)
+    plt.text(2.0, 0.5, text, fontsize=20)
+    if savefig:
+        plt.savefig(savefig, dpi=75)
+
     plt.show()
 
 
