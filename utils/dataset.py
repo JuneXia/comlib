@@ -303,7 +303,7 @@ class ImageParse(object):
     RANDOM_ROTATE = 1
     RANDOM_CROP = 2
     RANDOM_LEFT_RIGHT_FLIP = 4
-    FIXED_STANDARDIZATION = 8
+    STANDARDIZATION = 8
     FLIP = 16
     RANDOM_GLASS = 32
     RANDOM_COLOR = 64
@@ -321,18 +321,25 @@ class ImageParse(object):
         self.set_train_augment()
         self.set_validation_augment()
 
-    def set_train_augment(self, random_crop=True, random_rotate=True, random_left_right_flip=True, fixed_standardization=True):
+    def set_train_augment(self, random_crop=1, random_rotate=True, random_left_right_flip=True, standardization=1):
+        """
+        :param random_crop: 图像随机裁剪，目前支持3种模式，分别是：0表示不裁剪，1表示使用随机裁剪，2表示使用中心裁剪或者padding
+        :param random_rotate:
+        :param random_left_right_flip:
+        :param standardization: 图像标准化，目前支持3种模式，分别是：0表示不使用标准化，1表示使用固定标准化，2表示使用实例标准化
+        :return:
+        """
         self.train_augment = {ImageParse.RANDOM_CROP: random_crop,
                               ImageParse.RANDOM_ROTATE: random_rotate,
                               ImageParse.RANDOM_LEFT_RIGHT_FLIP: random_left_right_flip,
-                              ImageParse.FIXED_STANDARDIZATION: fixed_standardization
+                              ImageParse.STANDARDIZATION: standardization
                               }
 
-    def set_validation_augment(self, random_crop=False, random_rotate=False, random_left_right_flip=False, fixed_standardization=True):
+    def set_validation_augment(self, random_crop=2, random_rotate=False, random_left_right_flip=False, standardization=1):
         self.validation_augment = {ImageParse.RANDOM_CROP: random_crop,
                                    ImageParse.RANDOM_ROTATE: random_rotate,
                                    ImageParse.RANDOM_LEFT_RIGHT_FLIP: random_left_right_flip,
-                                   ImageParse.FIXED_STANDARDIZATION: fixed_standardization
+                                   ImageParse.STANDARDIZATION: standardization
                                    }
 
     def _imdecode(self, filename):
@@ -343,11 +350,15 @@ class ImageParse(object):
         return image
 
     def _image_augment(self, image, augments):
-        if augments[ImageParse.RANDOM_CROP]:
+        if augments[ImageParse.RANDOM_CROP] == 0:
+            pass
+        elif augments[ImageParse.RANDOM_CROP] == 1:
             image = tf.image.random_crop(image, self.imshape)
-        else:
+        elif augments[ImageParse.RANDOM_CROP] == 2:
             # image = tf.image.resize_image_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
             image = tf.image.resize_with_crop_or_pad(image, self.imshape[0], self.imshape[1])
+        else:
+            raise Exception('not supported random_crop parameter.')
 
         # image = (tf.cast(image, tf.float32) - 127.5) / 128.0
         # return image
@@ -372,10 +383,14 @@ class ImageParse(object):
         if augments[ImageParse.RANDOM_LEFT_RIGHT_FLIP]:
             image = tf.image.random_flip_left_right(image)
 
-        if augments[ImageParse.FIXED_STANDARDIZATION]:
+        if augments[ImageParse.STANDARDIZATION] == 0:  # 不使用标准化
+            pass
+        elif augments[ImageParse.STANDARDIZATION] == 1:  # 使用固定标准化
             image = (tf.cast(image, tf.float32) - 127.5) / 128.0
-        else:
+        elif augments[ImageParse.STANDARDIZATION] == 2:  # 使用实例标准化
             image = tf.image.per_image_standardization(image)
+        else:
+            raise Exception('not supported standardization parameter.')
 
         return image
 
@@ -402,6 +417,177 @@ class ImageParse(object):
             return image, (label, label)
         else:
             return image, label
+
+
+class TFDataGenerator(ImageParse):
+    def __init__(self, sess, images_path, images_label, imshape, batch_size=16, phase_train=True, repeat=-1):
+        """
+        :param sess:
+        :param images_path:
+        :param images_label:
+        :param imshape:
+        :param batch_size:
+        :param phase_train:
+        """
+        super(TFDataGenerator, self).__init__(imshape=imshape)
+        self._started = False
+        self._epoch = 0
+
+        self.sess = sess
+        self.batch_size = batch_size
+        self.repeat = repeat
+        # if config.debug == 1:
+        #     end_idx = 10000
+        # else:
+        #     end_idx = None
+        # image_list, label_list, val_image_list, val_label_list = Datset.load_feedata(config.train_data_path, end_idx=end_idx)
+
+        # imparse = Datset.ImageParse(imshape=imshape)
+        if phase_train:
+            # parse_func = imparse.train_parse_func
+            self.parse_func = self.train_parse_func
+        else:
+            # parse_func = imparse.validation_parse_func
+            self.parse_func = self.validation_parse_func
+
+        self.images_info = np.stack([images_path, images_label], axis=1)
+
+    def _start_discard(self):
+        # filenames = tf.constant(images_path)
+        # filelabels = tf.constant(images_label, dtype=tf.int64)
+        # self.dataset = tf.data.Dataset.from_tensor_slices((filenames, filelabels))
+        # self._start()
+        raise Exception('废弃，因为tf.data.Dataset.shuffle的reshuffle_each_iteration操作只能在buffer_size中reshuffle，而不能在整个数据集上reshuffle!')
+
+    def _start(self):
+        """
+        因为tf.data.Dataset.shuffle的reshuffle_each_iteration操作只能在buffer_size中reshuffle，而不能在整个数据集上reshuffle,
+        故这里使用np.random.shuffle来进行全局的shuffle.
+        :return:
+        """
+        # np.random.shuffle(self.images_info)
+        filenames = tf.constant(self.images_info[:, 0])
+        filelabels = tf.constant(self.images_info[:, 1], dtype=tf.int64)
+        self.dataset = tf.data.Dataset.from_tensor_slices((filenames, filelabels))
+        self.dataset = self.dataset.map(self.parse_func, num_parallel_calls=4)  # tf.data.experimental.AUTOTUNE
+        self.dataset = self.dataset.shuffle(buffer_size=10,
+                                  # seed=tf.compat.v1.set_random_seed(666),
+                                  # reshuffle_each_iteration=True
+                                  ).batch(self.batch_size).prefetch(5)  # repeat 不指定参数表示允许无穷迭代
+        # self.dataset = self.dataset.repeat(self.repeat)
+
+        self.iterator = self.dataset.make_initializable_iterator()
+        self.next_element = self.iterator.get_next()
+
+        self.sess.run(self.iterator.initializer)
+
+    def next_batch(self):
+        if not self._started:
+            self._start()
+            self._started = True
+
+        try:
+            images, labels = self.sess.run(self.next_element)
+        except tf.errors.OutOfRangeError:
+            if self.repeat == 1:
+                raise Exception('iterate finish!')
+            elif self.repeat == -1:
+                # self.sess.run(self.iterator.initializer)
+                self._start()
+                images, labels = self.sess.run(self.next_element)
+            else:
+                raise Exception('iterate finish! On the other hand, repeat parameter is not supported!')
+
+        return images, labels
+
+
+def parser(record):
+    features = tf.parse_single_example(
+        record,
+        features={
+            'image_raw':tf.FixedLenFeature([],tf.string),
+            'pixels':tf.FixedLenFeature([],tf.int64),
+            'label':tf.FixedLenFeature([],tf.int64)
+        })
+    decoded_images = tf.decode_raw(features['image_raw'],tf.uint8)
+    retyped_images = tf.cast(decoded_images, tf.float32)
+    images = tf.reshape(retyped_images, [182, 182, 3])
+
+    images = tf.image.resize_with_crop_or_pad(images, 160, 160)
+
+    images = (images - 127.5) / 128.0
+
+    labels = tf.cast(features['label'], tf.int32)
+    #pixels = tf.cast(features['pixels'],tf.int32)
+    return images, labels
+
+
+class TFRecordDataGenerator(ImageParse):
+    def __init__(self, sess, tfrecords, imshape, batch_size=16, phase_train=True, repeat=-1):
+        """
+        :param sess:
+        :param images_path:
+        :param images_label:
+        :param imshape:
+        :param batch_size:
+        :param phase_train:
+        """
+        super(TFRecordDataGenerator, self).__init__(imshape=imshape)
+        self._started = False
+        self._epoch = 0
+
+        self.sess = sess
+        self.tfrecords = tfrecords
+        self.batch_size = batch_size
+        self.repeat = repeat
+
+        if phase_train:
+            self.parse_func = self.train_parse_func
+        else:
+            self.parse_func = self.validation_parse_func
+
+    def _start_discard(self):
+        # filenames = tf.constant(images_path)
+        # filelabels = tf.constant(images_label, dtype=tf.int64)
+        # self.dataset = tf.data.Dataset.from_tensor_slices((filenames, filelabels))
+        # self._start()
+        raise Exception('废弃，因为tf.data.Dataset.shuffle的reshuffle_each_iteration操作只能在buffer_size中reshuffle，而不能在整个数据集上reshuffle!')
+
+    def _start(self):
+        train_files = tf.train.match_filenames_once(self.tfrecords, name='tfrecords')
+        dataset = tf.data.TFRecordDataset(train_files)
+        dataset = dataset.map(parser, num_parallel_calls=8)
+        dataset = dataset.shuffle(buffer_size=5000,
+                                  # seed=tf.compat.v1.set_random_seed(666),
+                                  reshuffle_each_iteration=True
+                                  ).batch(self.batch_size).prefetch(buffer_size=1000)  # tf.data.experimental.AUTOTUNE
+
+        self.iterator = dataset.make_initializable_iterator()
+        self.next_element = self.iterator.get_next()
+
+        # self.sess.run(tf.local_variables_initializer())
+        self.sess.run(tf.variables_initializer([train_files]))
+
+        self.sess.run(self.iterator.initializer)
+
+    def next_batch(self):
+        if not self._started:
+            self._start()
+            self._started = True
+
+        try:
+            images, labels = self.sess.run(self.next_element)
+        except tf.errors.OutOfRangeError:
+            if self.repeat == 1:
+                raise Exception('iterate finish!')
+            elif self.repeat == -1:
+                self.sess.run(self.iterator.initializer)
+                # self._start()
+                images, labels = self.sess.run(self.next_element)
+            else:
+                raise Exception('iterate finish! On the other hand, repeat parameter is not supported!')
+
+        return images, labels
 
 
 class DataSet(object):

@@ -339,6 +339,31 @@ def compute_iou(bbox1, bbox2):
         return (intersect / (sum_area - intersect)) * 1.0
 
 
+def get_learning_rate_from_file(filename, epoch):
+    """
+    :reference: 
+    :param filename:
+    :param epoch:
+    :return:
+    """
+    learning_rate = -1
+    with open(filename, 'r') as f:
+        for line in f.readlines():
+            line = line.split('#', 1)[0]
+            if line:
+                par = line.strip().split(':')
+                e = int(par[0])
+                if par[1]=='-':
+                    lr = -1
+                else:
+                    lr = float(par[1])
+                if e <= epoch:
+                    learning_rate = lr
+                else:
+                    return learning_rate
+    return learning_rate
+
+
 def _get_plt_color(index=None):
     # cnames = list(matplotlib.colors.cnames.keys())
     # cnames.sort()
